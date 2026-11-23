@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+# pythonpath = ["."]：把仓库根加进 sys.path，让 `from repo import ...` / `import main`
+# 在任何工作目录下都能解析。少了这行，从 D:\ 或 tests\ 里跑 pytest 都会报
+# ModuleNotFoundError: No module named 'repo'。
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    # 第三方迁移提示（要求装 httpx2），与本项目无关。
+    # 注意它继承 UserWarning 而不是 DeprecationWarning，所以按模块名过滤。
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]
