@@ -37,6 +37,8 @@ create table if not exists documents (
     constraint documents_filename_uniq unique (filename)
 );
 create index if not exists documents_uploaded_at_idx on documents (uploaded_at desc);
+-- 2026-11-23 加：上传端点落盘后记真实文件名。老库走 alter，重复执行无害。
+alter table documents add column if not exists stored_path text;
 """
 
 

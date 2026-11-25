@@ -17,6 +17,9 @@ class DocumentOut(BaseModel):
     size_bytes: int
     status: str
     uploaded_at: datetime
+    # 只在走 /documents/upload 时有值：磁盘上的真实文件名（带 uuid 前缀）。
+    # 存文件名而不是完整路径，换存储目录时不用改数据。
+    stored_path: str | None = None
 
     model_config = {"from_attributes": True}
 
