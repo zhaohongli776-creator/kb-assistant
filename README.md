@@ -3,7 +3,7 @@
 **是什么**：企业知识库问答系统的后端。M1 阶段只做一件事——用 API 管文档：文件传上来、落盘、元数据入库、能查能删，测试全绿。
 **现在到哪**：M1 完成。6 个接口 / 唯一约束 409 / 参数与大小校验 422 / 超限 413 / 30 条测试全绿 / 上传落盘端到端验证过。解析与切片（M2）还没做。
 
-演示录屏（24 秒，从选文件到列表回显）：`D:\kb-assistant-demos\2026-11-24-M1-upload-demo.mp4`
+演示录屏（24 秒，从选文件到列表回显）：仓库外的 `kb-assistant-demos\2026-11-24-M1-upload-demo.mp4`
 
 ## 怎么跑
 
@@ -78,14 +78,28 @@ tests/           test_api 11（内存）· test_upload 11（落盘/回滚）· t
 3. **`pg_ctl -l` 的日志不能放 `data\` 目录。** postmaster 自己也在 data 里写日志，撞上会报 `could not open file: sharing violation` 并空转 30 秒。日志放 `%TEMP%`。
 4. **写给 `powershell.exe`（5.1）执行的 `.ps1` 必须存成 UTF-8 with BOM。** 没有 BOM 时它按 GBK 读，中文注释会被撕成乱码并报语法错（`Unexpected token 'data'`）。
 5. **`Start-Process -Wait` 会连子孙进程一起等。** postmaster 不会退出，于是命令永远挂住。要启动数据库用 `-PassThru` 不等待，或交给计划任务。
-6. **解压版 PostgreSQL 不注册 Windows 服务。** 重启电脑后 5432 没人监听，`/health` 报 `db: down`。本机已用计划任务 `PostgreSQL18-kb`（登录时触发）+ 启动文件夹 `postgres-kb.cmd` 兜底。
+6. **解压版 PostgreSQL 不注册 Windows 服务。** 重启电脑后 5432 没人监听，`/health` 报 `db: down`。本机用计划任务（登录时触发）+ 启动文件夹里的一个 `.cmd` 兜底；具体名字因人而异，不写进仓库。
+
 7. **别用 `python tests/xxx.py` 跑测试。** pytest 的 prepend 模式只把测试文件所在目录放进 `sys.path`，仓库根不在里面 → `ModuleNotFoundError: No module named 'repo'`。入口固定为 `python -m pytest`；根目录的 `conftest.py` 与 `pyproject.toml` 的 `pythonpath = ["."]` 负责路径，两者互补（老版本 pytest 不认 `pythonpath`，靠 conftest 兜底）。
+
 8. **磁盘文件名加 uuid 前缀不是画蛇添足。** NTFS 大小写不敏感，`A.txt` 和 `a.txt` 落盘会互相覆盖；PostgreSQL 的 `UNIQUE` 是区分大小写的。同一批文件同时伺候两种语义必然对不上，所以磁盘名是 `{uuid}_{原名}`，撞名交给 uuid 解决，原始文件名只活在库里。`stored_path` 存裸文件名而不是完整路径，是为了让存储根目录以后能搬家。
+
 9. **`/docs` 里那个 `Execute` 在卡片最底部，`Cancel` 在最顶部。** 录制和演示时按错两次都死在这儿——展开接口卡片后眼睛往上看容易点到 `Cancel`/`Reset`，真正的蓝色提交条在最下面。
 
-## 数据库密码
+10. **连接串会进终端和截图，打印前先打码。** `db.mask()` 把密码换成 `***`，`python db.py` 输出的 `schema 就绪：postgresql://postgres:***@localhost:5432/kb` 才是该出现在录屏和日志里的形状。原样 `print(DSN)` 等于把口令贴到墙上。
 
-本机 `postgres` 用户的密码已重置为 `postgres`（`pg_hba.conf` 临时改 trust → `ALTER USER` → 立刻还原成 `scram-sha-256`，原文件备份在 `data\pg_hba.conf.bak-20261121`）。生产环境请改成强密码并只放在 `.env` 里。
+## 连接串怎么配
+
+仓库里**不存任何真实凭据**。`.env.example` 里的 `CHANGE_ME` 是占位符，照抄跑不通；真正的口令只写在你本地的 `.env` 里，那个文件被 `.gitignore` 挡住，从未进过任何一次提交。
+
+`db.py` 的默认值也是占位符。忘了配 `.env` 就直接 `connect()`，会拿到一句明确的报错，而不是默默用一个默认口令连上去：
+
+```
+RuntimeError: DATABASE_URL 没配置。把 .env.example 复制成 .env，把 CHANGE_ME 换成自己的口令；
+仓库里不存凭据，代码里也没有默认密码。
+```
+
+生产环境用 12 位以上随机串，只放 `.env`，轮换时只改那一个文件。
 
 ## 已知限制
 

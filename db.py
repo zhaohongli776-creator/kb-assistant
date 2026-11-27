@@ -25,7 +25,26 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-DSN = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/kb")
+# 仓库里不存任何真实凭据：默认值是占位符，connect() 撞上它会直接报错让人去配 .env。
+_PLACEHOLDER = "postgresql://postgres:CHANGE_ME@localhost:5432/kb"
+DSN = os.environ.get("DATABASE_URL") or _PLACEHOLDER
+
+
+def mask(dsn: str | None = None) -> str:
+    """把连接串里的密码换成 ***，专供 print / 日志使用。
+
+    连接串会进终端滚动区、截图、CI 日志，原样打出去等于把密码贴墙上。
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    raw = dsn if dsn is not None else DSN
+    parts = urlsplit(raw)
+    if not parts.password:
+        return raw
+    netloc = f"{parts.username}:***@{parts.hostname}"
+    if parts.port:
+        netloc += f":{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 DDL = """
 create table if not exists documents (
@@ -47,6 +66,12 @@ def connect(*, connect_timeout: int = 3):
 
     默认带 connect_timeout，避免数据库不可达时健康检查挂死。
     """
+    if "CHANGE_ME" in DSN:
+        raise RuntimeError(
+            "DATABASE_URL 没配置。把 .env.example 复制成 .env，把 CHANGE_ME 换成自己的口令；"
+            "仓库里不存凭据，代码里也没有默认密码。"
+        )
+
     import psycopg  # noqa: PLC0415
 
     kwargs = {} if "connect_timeout" in DSN else {"connect_timeout": connect_timeout}
@@ -67,4 +92,4 @@ def init_schema(conn=None) -> None:
 
 if __name__ == "__main__":
     init_schema()
-    print(f"schema 就绪：{DSN}")
+    print(f"schema 就绪：{mask()}")
