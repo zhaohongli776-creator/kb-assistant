@@ -1,110 +1,81 @@
 # kb-assistant
 
-**是什么**：企业知识库问答系统的后端。M1 阶段只做一件事——用 API 管文档：文件传上来、落盘、元数据入库、能查能删，测试全绿。
-**现在到哪**：M1 完成。6 个接口 / 唯一约束 409 / 参数与大小校验 422 / 超限 413 / 30 条测试全绿 / 上传落盘端到端验证过。解析与切片（M2）还没做。
+企业知识库问答系统的后端。当前版本做「存」这一层：上传文档，文件落盘、元数据写进 PostgreSQL，随后能列、能查、能删。
 
-演示录屏（24 秒，从选文件到列表回显）：仓库外的 `kb-assistant-demos\2026-11-24-M1-upload-demo.mp4`
+解析、切片、向量化检索都还没做——传上来的文档目前只是被存着，不会被读懂。
 
-## 怎么跑
+## 前置
 
-```powershell
-# 0) 起数据库（本机装的是解压版 PostgreSQL 18.6，没有注册 Windows 服务）
-powershell -ExecutionPolicy RemoteSigned -File .\scripts\pg.ps1 start
-powershell -ExecutionPolicy RemoteSigned -File .\scripts\pg.ps1 status   # 确认 127.0.0.1:5432 在监听
+- Python 3.10+
+- PostgreSQL 12+，连接串通过 `DATABASE_URL` 提供
 
-# 1) 装依赖 + 配连接串
+## 快速开始
+
+```bash
 pip install -r requirements.txt
-Copy-Item .env.example .env        # .env 已被 .gitignore 排除，不会进仓库
-# 编辑 .env 里的 DATABASE_URL
 
-# 2) 建表 + 起服务
-python db.py                       # 幂等：表已存在时什么也不做，缺列会补
+# 把 .env.example 复制成 .env，再把里面的 CHANGE_ME 换成你的数据库口令
+python db.py                                    # 建表，幂等，可反复执行
 python -m uvicorn main:app --reload --port 8000
-# 打开 http://127.0.0.1:8000/docs
-
-# 3) 测试
-python -m pytest -q                # 30 passed（库没起来会 skip 4 条 → 26 passed）
 ```
 
-`db.py` 会自己读同目录 `.env`（标准库实现，没引 python-dotenv）；环境变量优先于 `.env`。
+打开 <http://127.0.0.1:8000/docs>，Swagger 里可以直接选文件试上传，不用写客户端。
 
-> 本机没有 `pwsh`（PowerShell 7 没装），只有 `powershell.exe`（5.1）。所有命令按 5.1 写。想用 `.\scripts\pg.ps1 start` 这种简写，得先 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 一次。
+跑测试：
 
-> **测试的唯一入口是 `python -m pytest`。** 别用 `python tests/test_repo.py` 直接跑测试文件——那完全不经过 pytest，`sys.path[0]` 变成 `tests\`，`from repo import ...` 必然 `ModuleNotFoundError`。仓库根的 `conftest.py` + `pyproject.toml` 的 `pythonpath = ["."]` 保证从任何工作目录（仓库根 / `tests\` / `C:\`）跑都全绿。
+```bash
+python -m pytest -q                             # 30 passed
+```
+
+数据库连不上时，依赖真库的 4 条会自动 skip 成 `26 passed, 4 skipped`——看到 skip 先去把数据库起起来。
+
+> Windows 上如果 PostgreSQL 是解压版、没注册成 Windows 服务，可以用 `scripts/pg.ps1 start|stop|status` 代管。已经在正常监听 5432 的环境（Windows 服务 / systemd / Docker / 云托管）跳过这一步。
 
 ## 接口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/health` | 探活，顺带 ping 一次库 |
-| POST | `/documents` | 只登记元数据（不上传文件本体） |
-| POST | `/documents/upload` | 上传文件：落盘 + 登记，201 |
-| GET | `/documents` | 列表，默认 50 条，按时间倒序；`?limit=` 限 1..200，越界 400 |
-| GET | `/documents/{id}` | 取一份，没有则 404 |
-| DELETE | `/documents/{id}` | 删除，连带删磁盘文件，204 |
+| GET | `/health` | 探活，顺带 ping 一次数据库 |
+| POST | `/documents` | 只登记元数据，不上传文件本体 |
+| POST | `/documents/upload` | 上传文件：落盘 + 登记 |
+| GET | `/documents` | 列表，默认 50 条，按上传时间倒序 |
+| GET | `/documents/{id}` | 取单个文档 |
+| DELETE | `/documents/{id}` | 删除，连带删掉磁盘文件 |
 
-状态码：重名 `409`、扩展名/空文件/`limit` 越界 `400`、参数校验 `422`、超 50MB `413`。
+约束：扩展名限 `.pdf` `.docx` `.txt` `.md`，单文件 ≤ 50MB，文件名全库唯一。列表的 `?limit=` 取值 1..200。
 
-## 验证清单（M1 收工判据）
+状态码：重名 `409`、参数不合法 `422`、超 50MB `413`、`limit` 越界 `400`、文档不存在 `404`。
 
-- [x] `/health` 返回 `{"status":"ok","db":"ok"}`
-- [x] `/docs` 上能走通增删查（POST 201 → GET 200 → 重名 409 → DELETE 204）
-- [x] 上传 `POST /documents/upload` → 磁盘有文件、库里有行、`stored_path` 三处一致
-- [x] `pytest -q` → 30 passed
-- [x] 重启 uvicorn 后之前登记的文档还在（真落库）；重启 PostgreSQL 后也在
-- [x] 连打 150 次 `/health` 后 `pg_stat_activity` 里只有 1 条连接（无连接泄漏）
-- [x] 上传失败（重名 409 / 超限 413 / 扩展名 422）不会在磁盘留垃圾文件
-- [ ] 换台电脑按本 README 能跑起来
+## 配置
 
-## 结构
+只有一个环境变量。
 
-```
-db.py            PostgreSQL 连接 + 建表 DDL（含 stored_path 幂等迁移）+ .env 读取
-repo.py          仓库层：PgRepo（生产）/ InMemoryRepo（测试），closing() 显式关连接
-models.py        Pydantic 校验（422 就长在这里）
-main.py          6 个接口 + 上传落盘 + 依赖注入（app.dependency_overrides 换实现）
-scripts/pg.ps1   本地 PostgreSQL 启停（start/stop/restart/status）
-conftest.py      pytest 引导：把仓库根塞进 sys.path
-pyproject.toml   pytest 配置（pythonpath / testpaths）
-tests/           test_api 11（内存）· test_upload 11（落盘/回滚）· test_repo 4（假连接）· test_pg_repo 4（真库，不可达自动 skip）
-```
+| 名称 | 说明 |
+|---|---|
+| `DATABASE_URL` | PostgreSQL 连接串，必填，例如 `postgresql://user:pass@host:5432/kb` |
 
-上传落盘的顺序是：写 `.{uuid}.part` → 边流边算大小（超限立刻 413）→ 校验扩展名 → `replace()` 成 `{uuid}_{原名}` → 才调 `repo.create()`。所以**任何一条库里的行都意味着磁盘上的文件真的存在**；反过来先写库再落盘，中途崩了就是一条指向空气的行。
+`db.py` 自己读同目录的 `.env`（标准库实现，不需要 python-dotenv），格式是 `KEY=VALUE`；已经存在的环境变量优先于 `.env`。
 
-## 踩过的坑（都写进了测试或注释，别再踩一遍）
+仓库里不存任何凭据。`.env.example` 里的 `CHANGE_ME` 是占位符，照抄跑不通；真实口令只写在本地 `.env` 里，那个文件被 `.gitignore` 排除。忘了配就直接连库，会拿到一句明确的报错，而不是默默用某个默认口令连上去。
 
-1. **psycopg 的 `with conn:` 只提交事务，不关闭连接。** 用它当连接管理会每请求漏一条连接，100 次后打满 `max_connections`，服务整体挂死。必须 `contextlib.closing()` 显式关。
-2. **`return` 不能写在 `with conn:` 块里。** 提前返回会跳过 `conn.commit()`，psycopg 在关闭时回滚整条事务——`create()` 明明返回了 id，库里却查不到。正确顺序是：取结果 → commit → 关闭；异常路径 rollback。
-3. **`pg_ctl -l` 的日志不能放 `data\` 目录。** postmaster 自己也在 data 里写日志，撞上会报 `could not open file: sharing violation` 并空转 30 秒。日志放 `%TEMP%`。
-4. **写给 `powershell.exe`（5.1）执行的 `.ps1` 必须存成 UTF-8 with BOM。** 没有 BOM 时它按 GBK 读，中文注释会被撕成乱码并报语法错（`Unexpected token 'data'`）。
-5. **`Start-Process -Wait` 会连子孙进程一起等。** postmaster 不会退出，于是命令永远挂住。要启动数据库用 `-PassThru` 不等待，或交给计划任务。
-6. **解压版 PostgreSQL 不注册 Windows 服务。** 重启电脑后 5432 没人监听，`/health` 报 `db: down`。本机用计划任务（登录时触发）+ 启动文件夹里的一个 `.cmd` 兜底；具体名字因人而异，不写进仓库。
-
-7. **别用 `python tests/xxx.py` 跑测试。** pytest 的 prepend 模式只把测试文件所在目录放进 `sys.path`，仓库根不在里面 → `ModuleNotFoundError: No module named 'repo'`。入口固定为 `python -m pytest`；根目录的 `conftest.py` 与 `pyproject.toml` 的 `pythonpath = ["."]` 负责路径，两者互补（老版本 pytest 不认 `pythonpath`，靠 conftest 兜底）。
-
-8. **磁盘文件名加 uuid 前缀不是画蛇添足。** NTFS 大小写不敏感，`A.txt` 和 `a.txt` 落盘会互相覆盖；PostgreSQL 的 `UNIQUE` 是区分大小写的。同一批文件同时伺候两种语义必然对不上，所以磁盘名是 `{uuid}_{原名}`，撞名交给 uuid 解决，原始文件名只活在库里。`stored_path` 存裸文件名而不是完整路径，是为了让存储根目录以后能搬家。
-
-9. **`/docs` 里那个 `Execute` 在卡片最底部，`Cancel` 在最顶部。** 录制和演示时按错两次都死在这儿——展开接口卡片后眼睛往上看容易点到 `Cancel`/`Reset`，真正的蓝色提交条在最下面。
-
-10. **连接串会进终端和截图，打印前先打码。** `db.mask()` 把密码换成 `***`，`python db.py` 输出的 `schema 就绪：postgresql://postgres:***@localhost:5432/kb` 才是该出现在录屏和日志里的形状。原样 `print(DSN)` 等于把口令贴到墙上。
-
-## 连接串怎么配
-
-仓库里**不存任何真实凭据**。`.env.example` 里的 `CHANGE_ME` 是占位符，照抄跑不通；真正的口令只写在你本地的 `.env` 里，那个文件被 `.gitignore` 挡住，从未进过任何一次提交。
-
-`db.py` 的默认值也是占位符。忘了配 `.env` 就直接 `connect()`，会拿到一句明确的报错，而不是默默用一个默认口令连上去：
+## 项目结构
 
 ```
-RuntimeError: DATABASE_URL 没配置。把 .env.example 复制成 .env，把 CHANGE_ME 换成自己的口令；
-仓库里不存凭据，代码里也没有默认密码。
+db.py            数据库连接、建表 DDL、.env 读取
+repo.py          仓库层接口 + 两个实现：PgRepo（生产）/ InMemoryRepo（测试）
+models.py        Pydantic 请求与响应模型，422 就长在这里
+main.py          全部 HTTP 路由与上传落盘逻辑
+scripts/pg.ps1   Windows 解压版 PostgreSQL 启停
+tests/           接口、上传落盘、仓库层、真库约束
 ```
-
-生产环境用 12 位以上随机串，只放 `.env`，轮换时只改那一个文件。
 
 ## 已知限制
 
-- 只做「存」，不做「懂」：不解析、不切片、不向量化（M2 开始）
+- 不解析文档内容，只信扩展名；改过扩展名的可执行文件会照收
 - 没有鉴权、没有分页游标、没有软删除
-- 上传不看文件内容，只信扩展名；改过扩展名的 PE/文档会照收
-- 连接是"每请求一开一关"，没有连接池；QPS 上来后换 `psycopg_pool`
-- 单机单目录，没有对象存储，也没有并发上传的清理任务（进程被杀会留下 `.part`）
+- 每请求开一条连接、用完就关，没有连接池
+- 单机单目录存储，没有对象存储；进程被强杀会留下 `.part` 临时文件
+
+## 开发笔记
+
+踩坑记录、设计取舍、调试备忘在 [NOTES.md](NOTES.md)。
